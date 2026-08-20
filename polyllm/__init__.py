@@ -1,3 +1,3 @@
-from .client import PolyLLM
+from .client import PROVIDERS, PolyLLM
 
-__all__ = ["PolyLLM"]
+__all__ = ["PROVIDERS", "PolyLLM"]

@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>polyllm</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1b1e24;
+    --border: #2b3038;
+    --text: #e6e8ec;
+    --muted: #8b93a1;
+    --accent: #7aa2f7;
+    --user: #253044;
+    --error: #f7768e;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  /* an explicit display: on a panel would otherwise beat the UA [hidden] rule */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  /* ---- sidebar ---- */
+  aside {
+    width: 270px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 20px 18px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+  }
+  aside h1 {
+    margin: 0;
+    font-size: 18px;
+    letter-spacing: .5px;
+    font-weight: 600;
+  }
+  aside h1 span { color: var(--accent); }
+  .field { display: flex; flex-direction: column; gap: 7px; }
+  .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    color: var(--muted);
+  }
+  .provider {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 9px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .provider:hover { background: #232833; }
+  .provider input { accent-color: var(--accent); margin: 0; }
+  .provider.disabled { opacity: .45; cursor: not-allowed; }
+  .provider .note { margin-left: auto; font-size: 11px; color: var(--error); }
+  .hint { font-size: 11px; color: var(--muted); }
+  .hint.bad { color: var(--error); }
+  input[type=text], input[type=number], textarea, select {
+    width: 100%;
+    padding: 8px 10px;
+    background: #12141a;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font: inherit;
+    font-size: 13px;
+  }
+  textarea { resize: vertical; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  select { cursor: pointer; }
+  button {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #232833;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* ---- chat ---- */
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 10px 22px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    padding: 8px 16px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    background: none;
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: -1px;
+  }
+  .tab:hover:not(.active) { color: var(--text); }
+  .tab.active {
+    color: var(--text);
+    background: var(--bg);
+    border-color: var(--border);
+    border-bottom-color: var(--bg);
+  }
+  #rawview { flex: 1; overflow-y: auto; padding: 22px; }
+  #rawview details {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    background: var(--panel);
+  }
+  #rawview summary {
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: .02em;
+  }
+  #rawview summary:hover { color: var(--text); }
+  #rawview pre {
+    margin: 0;
+    padding: 0 14px 14px;
+    overflow-x: auto;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+  }
+  #rawview .failed summary { color: var(--error); }
+  #transcript {
+    flex: 1;
+    overflow-y: auto;
+    padding: 26px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .empty {
+    margin: auto;
+    color: var(--muted);
+    text-align: center;
+    font-size: 14px;
+  }
+  .turn { display: flex; flex-direction: column; gap: 5px; max-width: 760px; width: 100%; }
+  .turn.user { align-self: flex-end; align-items: flex-end; }
+  .who {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    color: var(--muted);
+  }
+  .bubble {
+    padding: 11px 14px;
+    border-radius: var(--radius);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .turn.user .bubble { background: var(--user); border-color: #33405a; }
+  .turn.error .bubble { border-color: var(--error); color: var(--error); }
+  .bubble.pending { color: var(--muted); font-style: italic; }
+  .notice { font-size: 12px; color: var(--error); opacity: .85; }
+
+  /* ---- composer ---- */
+  form {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    padding: 14px 22px 18px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+  #input {
+    flex: 1;
+    max-height: 200px;
+    min-height: 44px;
+    font-size: 15px;
+    padding: 11px 12px;
+  }
+  #send { height: 44px; min-width: 84px; }
+  #send.stop { border-color: var(--error); color: var(--error); }
+</style>
+</head>
+<body>
+<aside>
+  <h1>poly<span>llm</span></h1>
+
+  <div class="field">
+    <div class="label">Provider</div>
+    <div id="providers"></div>
+  </div>
+
+  <label class="field">
+    <span class="label">Model</span>
+    <input type="text" id="model" list="modelList" placeholder="loading…" autocomplete="off">
+    <datalist id="modelList"></datalist>
+    <span class="hint" id="modelHint"></span>
+  </label>
+
+  <label class="field">
+    <span class="label">System prompt</span>
+    <textarea id="system" rows="4" placeholder="(optional)"></textarea>
+  </label>
+
+  <label class="field">
+    <span class="label">Thinking effort</span>
+    <select id="effort"></select>
+  </label>
+
+  <label class="field">
+    <span class="label">Max tokens</span>
+    <input type="number" id="maxTokens" value="4096" min="1" step="512">
+  </label>
+
+  <button id="newChat" type="button">New chat</button>
+</aside>
+
+<main>
+  <div class="tabs">
+    <button type="button" class="tab active" data-panel="transcript">Chat</button>
+    <button type="button" class="tab" data-panel="rawview" id="rawTab">Raw</button>
+  </div>
+  <div id="rawview" hidden></div>
+  <div id="transcript">
+    <div class="empty">Pick a provider and say something.</div>
+  </div>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Type a message…  (Enter to send, Shift+Enter for a newline)"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</main>
+
+<script>
+const transcript = document.getElementById("transcript");
+const providersEl = document.getElementById("providers");
+const modelEl = document.getElementById("model");
+const modelList = document.getElementById("modelList");
+const modelHint = document.getElementById("modelHint");
+const effortEl = document.getElementById("effort");
+const systemEl = document.getElementById("system");
+const maxTokensEl = document.getElementById("maxTokens");
+const inputEl = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const composer = document.getElementById("composer");
+const rawview = document.getElementById("rawview");
+const rawTab = document.getElementById("rawTab");
+
+let messages = [];        // the conversation; the server keeps no state
+let providers = [];
+let controller = null;    // non-null while a response is streaming
+let modelRequest = 0;     // guards against out-of-order model fetches
+let rawLog = [];          // one entry per completed call, for the Raw tab
+
+/* ---------- setup ---------- */
+
+async function loadProviders() {
+  providers = await (await fetch("/api/providers")).json();
+  providersEl.innerHTML = "";
+  const firstUsable = providers.find(p => p.key_present);
+
+  for (const p of providers) {
+    const row = document.createElement("label");
+    row.className = "provider" + (p.key_present ? "" : " disabled");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "provider";
+    radio.value = p.name;
+    radio.disabled = !p.key_present;
+    radio.checked = firstUsable && p.name === firstUsable.name;
+    radio.addEventListener("change", () => {
+      modelEl.value = "";   // a model id from the old provider won't exist here
+      onProviderChange();
+    });
+    row.append(radio, Object.assign(document.createElement("span"), { textContent: p.name }));
+    if (!p.key_present) {
+      row.append(Object.assign(document.createElement("span"),
+        { className: "note", textContent: "no API key" }));
+    }
+    providersEl.append(row);
+  }
+  onProviderChange();
+}
+
+function selectedProvider() {
+  const checked = providersEl.querySelector("input:checked");
+  return checked ? checked.value : null;
+}
+
+function onProviderChange() {
+  const provider = selectedProvider();
+  const known = providers.find(p => p.name === provider);
+  modelEl.placeholder = known ? known.default_model : "no provider available";
+  syncEfforts(known);
+  if (provider) loadModels(provider);
+}
+
+// Each provider names its thinking levels differently, so the options come
+// from the server. "" means send nothing and let the model decide.
+function syncEfforts(provider) {
+  const previous = effortEl.value;
+  effortEl.innerHTML = "";
+  effortEl.append(new Option("provider default", ""));
+  for (const level of (provider ? provider.efforts : [])) {
+    effortEl.append(new Option(level, level));
+  }
+  effortEl.value = [...effortEl.options].some(o => o.value === previous)
+    ? previous : "";
+}
+
+// Ask the provider what it can actually run, and offer it as autocomplete.
+// The box stays free text so an id the list doesn't know still works.
+async function loadModels(provider) {
+  const token = ++modelRequest;
+  modelList.innerHTML = "";
+  modelHint.className = "hint";
+  modelHint.textContent = "fetching models…";
+
+  try {
+    const data = await (await fetch(`/api/models/${provider}`)).json();
+    if (token !== modelRequest) return;   // a later switch already won
+
+    for (const model of data.models) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      if (model.label && model.label !== model.id) option.label = model.label;
+      modelList.append(option);
+    }
+    modelEl.placeholder = data.default;
+
+    if (data.error) {
+      modelHint.className = "hint bad";
+      modelHint.textContent = data.error;
+    } else {
+      modelHint.textContent =
+        `${data.models.length} available — blank uses ${data.default}`;
+    }
+  } catch (err) {
+    if (token !== modelRequest) return;
+    modelHint.className = "hint bad";
+    modelHint.textContent = String(err);
+  }
+}
+
+/* ---------- tabs ---------- */
+
+for (const tab of document.querySelectorAll(".tab")) {
+  tab.addEventListener("click", () => {
+    for (const other of document.querySelectorAll(".tab")) {
+      const on = other === tab;
+      other.classList.toggle("active", on);
+      document.getElementById(other.dataset.panel).hidden = !on;
+    }
+  });
+}
+
+/* ---------- raw view ---------- */
+
+function addRaw(entry) {
+  rawLog.push(entry);
+  rawTab.textContent = `Raw (${rawLog.length})`;
+  renderRaw();
+}
+
+function renderRaw() {
+  rawview.innerHTML = "";
+  if (!rawLog.length) {
+    rawview.innerHTML = '<div class="empty">Nothing sent yet.</div>';
+    return;
+  }
+  rawLog.forEach((entry, i) => {
+    const box = document.createElement("details");
+    box.open = i === rawLog.length - 1;      // newest expanded
+    if (entry.failed) box.className = "failed";
+    const summary = document.createElement("summary");
+    const size = (new Blob([entry.body]).size / 1024).toFixed(1);
+    summary.textContent =
+      `#${i + 1} · ${entry.provider} · ${entry.model}` +
+      (entry.failed ? " · failed" : ` · ${size} KB`);
+    const pre = document.createElement("pre");
+    pre.textContent = entry.body;
+    box.append(summary, pre);
+    rawview.append(box);
+  });
+  rawview.scrollTop = rawview.scrollHeight;
+}
+
+/* ---------- rendering ---------- */
+
+function clearEmptyState() {
+  transcript.querySelector(".empty")?.remove();
+}
+
+function addTurn(who, text, kind) {
+  clearEmptyState();
+  const turn = document.createElement("div");
+  turn.className = "turn " + (kind || who);
+  const label = document.createElement("div");
+  label.className = "who";
+  label.textContent = who;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = text;
+  turn.append(label, bubble);
+  transcript.append(turn);
+  scrollToBottom();
+  return bubble;
+}
+
+function scrollToBottom() {
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+function setStreaming(on) {
+  sendBtn.textContent = on ? "Stop" : "Send";
+  sendBtn.classList.toggle("stop", on);
+}
+
+/* ---------- sending ---------- */
+
+composer.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (controller) { controller.abort(); return; }   // the button is "Stop" right now
+
+  const text = inputEl.value.trim();
+  const provider = selectedProvider();
+  if (!text || !provider) return;
+
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+
+  messages.push({ role: "user", content: text });
+  addTurn("user", text);
+
+  const bubble = addTurn("assistant", "thinking…");
+  bubble.classList.add("pending");
+
+  controller = new AbortController();
+  setStreaming(true);
+  const usedModel = modelEl.value.trim() || modelEl.placeholder;
+  let answer = "";
+  let failed = false;
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        provider,
+        model: modelEl.value.trim() || null,
+        system: systemEl.value.trim() || null,
+        max_tokens: Number(maxTokensEl.value) || 4096,
+        effort: effortEl.value || null,
+        messages,
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(`HTTP ${res.status}: ${detail}`);
+    }
+
+    // Read the SSE stream by hand: EventSource is GET-only and the history
+    // has to travel in the request body.
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    outer: while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop();
+
+      for (const chunk of chunks) {
+        const line = chunk.split("\n").find(l => l.startsWith("data:"));
+        if (!line) continue;
+        const event = JSON.parse(line.slice(5).trim());
+
+        if (event.type === "text") {
+          if (!answer) bubble.classList.remove("pending");
+          answer += event.text;
+          bubble.textContent = answer;
+          scrollToBottom();
+        } else if (event.type === "raw") {
+          addRaw({ provider, model: usedModel, body: event.text });
+        } else if (event.type === "notice") {
+          const note = document.createElement("div");
+          note.className = "notice";
+          note.textContent = event.text;
+          bubble.parentElement.append(note);
+          scrollToBottom();
+        } else if (event.type === "error") {
+          failed = true;
+          addRaw({ provider, model: usedModel, body: event.message, failed: true });
+          bubble.classList.remove("pending");
+          bubble.parentElement.classList.add("error");
+          bubble.textContent = (answer ? answer + "\n\n" : "") + event.message;
+          scrollToBottom();
+        } else if (event.type === "done") {
+          break outer;
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      failed = true;   // partial text stays on screen but not in the history
+      bubble.classList.remove("pending");
+      if (!answer) bubble.textContent = "(stopped)";
+    } else {
+      failed = true;
+      bubble.classList.remove("pending");
+      bubble.parentElement.classList.add("error");
+      bubble.textContent = String(err);
+    }
+  } finally {
+    controller = null;
+    setStreaming(false);
+    inputEl.focus();
+  }
+
+  // Only a completed answer joins the history; the user turn stays either way,
+  // so the transcript on screen and the history sent to the model never diverge.
+  if (!failed && answer) {
+    messages.push({ role: "assistant", content: answer });
+  }
+});
+
+/* ---------- composer behaviour ---------- */
+
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    composer.requestSubmit();
+  }
+});
+
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
+});
+
+document.getElementById("newChat").addEventListener("click", () => {
+  controller?.abort();
+  messages = [];
+  rawLog = [];
+  rawTab.textContent = "Raw";
+  renderRaw();
+  transcript.innerHTML = '<div class="empty">Pick a provider and say something.</div>';
+  inputEl.focus();
+});
+
+loadProviders();
+renderRaw();
+inputEl.focus();
+</script>
+</body>
+</html>

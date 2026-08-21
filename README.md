@@ -47,8 +47,20 @@ The **Raw** tab logs the provider's own response object for every call — the s
 CLI's `--raw` prints, one collapsible entry per turn, failures included. Gemini has no
 single final object when streaming, so its entry is the array of chunks the SDK returned.
 
-The server is stateless: your browser holds the conversation and posts the whole history
-on each turn, so "New chat" is all there is to clearing it (the Raw log clears with it).
+Conversations are saved as you go, so a reload or a restart doesn't lose them. Past chats
+are listed at the top of the sidebar — click one to reopen it, `✎` to rename it, `✕` to
+delete it, and **+ New chat** to start fresh. A chat is only created once you send the
+first message, which also gives it its title.
+
+Storage is a SQLite file at `~/.polyllm/conversations.db`; point `POLYLLM_DB` somewhere
+else to move it, and delete the file to wipe everything. Only the transcript is stored:
+the sidebar settings and the Raw log belong to the session, not the chat, so a reopened
+conversation keeps whatever provider and model you have selected now and starts with an
+empty Raw tab.
+
+Only a turn you actually received is stored. A failed or stopped answer leaves the
+question in the transcript with no reply, matching what stays on screen.
+
 Providers whose API key isn't set are greyed out in the sidebar.
 
 ## Library usage

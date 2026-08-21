@@ -67,6 +67,63 @@
   .provider.disabled { opacity: .45; cursor: not-allowed; }
   .provider .note { margin-left: auto; font-size: 11px; color: var(--error); }
   .hint { font-size: 11px; color: var(--muted); }
+
+  /* ---- conversation list ---- */
+  #conversations {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    /* Long histories shouldn't push the settings off the screen. */
+    max-height: 34vh;
+    overflow-y: auto;
+    margin: 0 -6px;
+    padding: 0 6px;
+  }
+  .convo {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 8px;
+    padding: 0 0 0 9px;
+    font-size: 13px;
+  }
+  .convo:hover { background: #232833; }
+  .convo.active { background: var(--user); }
+  .convo .name {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 0;
+    border: none;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .convo .name:hover { border-color: transparent; }
+  .convo .act {
+    padding: 2px 6px;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1;
+    visibility: hidden;
+  }
+  .convo:hover .act, .convo.active .act { visibility: visible; }
+  .convo .act:hover { color: var(--text); }
+  .convo .act.del:hover { color: var(--error); }
+  /* Renaming happens in place, so the input has to sit where the title was. */
+  .convo input.rename {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 6px;
+    font-size: 13px;
+  }
+  .convo.empty-note { color: var(--muted); font-size: 12px; padding: 6px 9px; }
   .hint.bad { color: var(--error); }
   input[type=text], input[type=number], textarea, select {
     width: 100%;
@@ -201,6 +258,13 @@
 <aside>
   <h1>poly<span>llm</span></h1>
 
+  <button id="newChat" type="button">+ New chat</button>
+
+  <div class="field">
+    <div class="label">Conversations</div>
+    <div id="conversations"></div>
+  </div>
+
   <div class="field">
     <div class="label">Provider</div>
     <div id="providers"></div>
@@ -228,7 +292,6 @@
     <input type="number" id="maxTokens" value="4096" min="1" step="512">
   </label>
 
-  <button id="newChat" type="button">New chat</button>
 </aside>
 
 <main>
@@ -260,8 +323,10 @@ const sendBtn = document.getElementById("send");
 const composer = document.getElementById("composer");
 const rawview = document.getElementById("rawview");
 const rawTab = document.getElementById("rawTab");
+const conversationsEl = document.getElementById("conversations");
 
-let messages = [];        // the conversation; the server keeps no state
+let messages = [];        // the turns of the open chat, posted whole each request
+let conversationId = null;  // the row the server stores those turns in; null until first send
 let providers = [];
 let controller = null;    // non-null while a response is streaming
 let modelRequest = 0;     // guards against out-of-order model fetches
@@ -357,6 +422,143 @@ async function loadModels(provider) {
   }
 }
 
+/* ---------- conversations ---------- */
+
+// The DB is the source of truth for the list; the browser only tracks which row
+// is open. Every mutation re-fetches rather than patching the list in place.
+async function loadConversations() {
+  let saved;
+  try {
+    saved = await (await fetch("/api/conversations")).json();
+  } catch {
+    return;   // the chat itself still works without the list
+  }
+
+  conversationsEl.innerHTML = "";
+  if (!saved.length) {
+    conversationsEl.innerHTML = '<div class="convo empty-note">No saved chats yet.</div>';
+    return;
+  }
+
+  for (const convo of saved) {
+    const row = document.createElement("div");
+    row.className = "convo" + (convo.id === conversationId ? " active" : "");
+
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "name";
+    name.textContent = convo.title;
+    name.title = convo.title;
+    name.addEventListener("click", () => openConversation(convo.id));
+
+    // Renaming gets its own button rather than a double-click on the title,
+    // which would open the conversation on the way past.
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "act";
+    rename.textContent = "\u270e";
+    rename.title = "Rename";
+    rename.addEventListener("click", () => startRename(row, convo));
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "act del";
+    del.textContent = "\u2715";
+    del.title = "Delete";
+    del.addEventListener("click", () => deleteConversation(convo));
+
+    row.append(name, rename, del);
+    conversationsEl.append(row);
+  }
+}
+
+function startRename(row, convo) {
+  const box = document.createElement("input");
+  box.type = "text";
+  box.className = "rename";
+  box.value = convo.title;
+
+  let settled = false;
+  const commit = async (save) => {
+    if (settled) return;   // Enter and the blur it causes both land here
+    settled = true;
+    const title = box.value.trim();
+    if (save && title && title !== convo.title) {
+      await fetch(`/api/conversations/${convo.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+    }
+    loadConversations();
+  };
+
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commit(true); }
+    if (e.key === "Escape") commit(false);
+  });
+  box.addEventListener("blur", () => commit(true));
+
+  row.replaceChildren(box);
+  box.focus();
+  box.select();
+}
+
+async function deleteConversation(convo) {
+  if (!confirm(`Delete "${convo.title}"?`)) return;
+  await fetch(`/api/conversations/${convo.id}`, { method: "DELETE" });
+  if (convo.id === conversationId) {
+    newChat();   // the open chat just went away; that refreshes the list too
+  } else {
+    loadConversations();
+  }
+}
+
+async function openConversation(id) {
+  if (id === conversationId) return;
+  controller?.abort();
+
+  let convo;
+  try {
+    const res = await fetch(`/api/conversations/${id}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    convo = await res.json();
+  } catch {
+    loadConversations();   // most likely deleted in another tab
+    return;
+  }
+
+  conversationId = convo.id;
+  messages = convo.messages.map(m => ({ role: m.role, content: m.content }));
+
+  // The raw log is this process's view of calls it made, not part of the stored
+  // chat, so a reopened conversation starts with an empty one.
+  rawLog = [];
+  rawTab.textContent = "Raw";
+  renderRaw();
+
+  transcript.innerHTML = "";
+  if (!messages.length) {
+    transcript.innerHTML = '<div class="empty">Pick a provider and say something.</div>';
+  }
+  for (const message of messages) addTurn(message.role, message.content);
+
+  loadConversations();
+  inputEl.focus();
+}
+
+function newChat() {
+  controller?.abort();
+  conversationId = null;
+  messages = [];
+  rawLog = [];
+  rawTab.textContent = "Raw";
+  renderRaw();
+  transcript.innerHTML = '<div class="empty">Pick a provider and say something.</div>';
+  loadConversations();
+  inputEl.focus();
+}
+
 /* ---------- tabs ---------- */
 
 for (const tab of document.querySelectorAll(".tab")) {
@@ -447,6 +649,17 @@ composer.addEventListener("submit", async (e) => {
   messages.push({ role: "user", content: text });
   addTurn("user", text);
 
+  // A conversation row is only created once there's something to put in it, so
+  // opening the page and changing your mind doesn't leave an empty chat behind.
+  if (conversationId === null) {
+    try {
+      const created = await fetch("/api/conversations", { method: "POST" });
+      conversationId = (await created.json()).id;
+    } catch {
+      conversationId = null;   // unsaved, but the turn still goes through
+    }
+  }
+
   const bubble = addTurn("assistant", "thinking…");
   bubble.classList.add("pending");
 
@@ -463,6 +676,7 @@ composer.addEventListener("submit", async (e) => {
       signal: controller.signal,
       body: JSON.stringify({
         provider,
+        conversation_id: conversationId,
         model: modelEl.value.trim() || null,
         system: systemEl.value.trim() || null,
         max_tokens: Number(maxTokensEl.value) || 4096,
@@ -541,7 +755,21 @@ composer.addEventListener("submit", async (e) => {
   // so the transcript on screen and the history sent to the model never diverge.
   if (!failed && answer) {
     messages.push({ role: "assistant", content: answer });
+    if (conversationId !== null) {
+      // The server stored the question when the request came in, but the answer
+      // is only real once it's all here — a stopped or failed turn never reaches
+      // this line, so the stored chat matches what's on screen.
+      fetch(`/api/conversations/${conversationId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "assistant", content: answer }),
+      }).catch(() => {});
+    }
   }
+
+  // The server names a new chat from its first message and reorders on write,
+  // so the list is refreshed from it rather than guessed at here.
+  loadConversations();
 });
 
 /* ---------- composer behaviour ---------- */
@@ -558,17 +786,10 @@ inputEl.addEventListener("input", () => {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
 });
 
-document.getElementById("newChat").addEventListener("click", () => {
-  controller?.abort();
-  messages = [];
-  rawLog = [];
-  rawTab.textContent = "Raw";
-  renderRaw();
-  transcript.innerHTML = '<div class="empty">Pick a provider and say something.</div>';
-  inputEl.focus();
-});
+document.getElementById("newChat").addEventListener("click", newChat);
 
 loadProviders();
+loadConversations();
 renderRaw();
 inputEl.focus();
 </script>
